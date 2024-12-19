@@ -1,0 +1,8 @@
+pkg_check_modules(DBUS REQUIRED dbus-1)
+pkg_check_modules(DBUS REQUIRED dbus-glib-1)
+
+include_directories(${DBUS_INCLUDE_DIRS})
+
+list(APPEND PAM_CHOOISFOX_LIBRARIES_LIST ${DBUS_LIBRARIES})
+list(APPEND PAM_CHOOISFOX_LIBRARIES_LIST ${DBUS_GLIB_LIBRARIES})
+
