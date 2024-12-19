@@ -1,4 +1,3 @@
-find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBXCRYPT REQUIRED libxcrypt)
 
 include_directories(${LIBXCRYPT_INCLUDE_DIRS})

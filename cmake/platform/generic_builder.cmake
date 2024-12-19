@@ -1,4 +1,5 @@
 include(FetchContent)
+find_package(PkgConfig REQUIRED)
 
 message(STATUS "CXX compiler:      ${CMAKE_CXX_COMPILER_ID}")
 
@@ -36,6 +37,7 @@ else()
 endif()
 
 # [LIBRARIES]
+include(cmake/libraries/curl.cmake)
 include(cmake/libraries/fmt.cmake)
 include(cmake/libraries/spdlog.cmake)
 include(cmake/libraries/openssl.cmake)

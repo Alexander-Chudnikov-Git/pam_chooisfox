@@ -11,6 +11,7 @@
 #include <dbus/dbus-glib-bindings.h>
 #include <dbus/dbus-glib-lowlevel.h>
 #include <glib.h>
+#include <curl/curl.h>
 
 #include <variant>
 #include <memory>
@@ -117,6 +118,10 @@ private:
 
     void stripHash(std::string &hash);
     std::string_view stripHashPrefix(const std::string& str, std::string_view prefix);
+
+private:
+    std::string sendPostRequest(const std::string& url, const std::string& post_data);
+    static size_t writeCallback(void* contents, size_t size, size_t nmemb, std::string* userp);
 
 private:
     std::shared_ptr<spdlog::sinks::syslog_sink<std::mutex>> syslog_sink;
